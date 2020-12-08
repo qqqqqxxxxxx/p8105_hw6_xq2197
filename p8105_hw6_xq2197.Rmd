@@ -6,6 +6,7 @@ output: github_document
 ```{r setup, include=FALSE}
 library(tidyverse)
 library(modelr)
+library(mgcv)
 library(p8105.datasets)
 ```
 
@@ -78,3 +79,83 @@ models_results_df %>%
   geom_errorbar(aes(ymin = CI_lower, ymax = CI_upper)) +
   theme(axis.text.x = element_text(angle = 90, hjust = 1))
 ```
+
+### Problem 2
+
+```{r}
+baby_df = 
+  read_csv("data/birthweight.csv") %>%
+  drop_na() %>%
+  janitor::clean_names() %>%
+  mutate(babysex = as.factor(babysex),
+         frace = as.factor(frace),
+         malform = as.factor(malform),
+         mrace = as.factor(mrace))
+```
+
+Fit my own model:
+
+First, based on common sense and biological and physiological knowledge, I hypothesize that baby's birth weight can be affected by baby's sex, mother's weight at delivery, family monthly income, presence of malformations that could affect weight, and previous number of low birth weight babies. Second, I will build a raw linear model and check the coefficients.
+
+```{r}
+model_fit = lm(bwt ~ babysex + delwt + fincome + malform + pnumlbw, data = baby_df) %>%
+  broom::tidy()
+```
+
+Based on the significance of the 5 coefficients, I will exclude malform and pnumlbw from my model. Now I rerun the model:
+
+```{r}
+model1_fit = lm(bwt ~ babysex + delwt + fincome, data = baby_df)
+```
+
+The coefficients all look good. Now build a plot of model residuals against fitted values.
+
+```{r}
+baby_df %>%
+  modelr::add_residuals(model1_fit) %>%
+  modelr::add_predictions(model1_fit) %>%
+  ggplot(aes(x = pred, y = resid)) +
+  geom_point()
+```
+
+Build the second and the third model.
+
+```{r}
+model2_fit = lm(bwt ~ blength + gaweeks, data = baby_df)
+model3_fit = lm(bwt ~ bhead + blength + babysex + bhead * blength + bhead * babysex + blength * babysex + bhead * blength * babysex, data = baby_df)
+```
+
+Compare the 3 models.
+
+```{r}
+cv_df = 
+  crossv_mc(baby_df, 100) %>%
+  mutate(
+    train = map(train, as_tibble),
+    test = map(test, as_tibble))
+
+# use mutate + map & map2 to fit models to training data and obtain corresponding RMSEs for the testing data
+cv_df = 
+  cv_df %>% 
+  mutate(
+    model1_fit  = map(train, ~lm(bwt ~ babysex + delwt + fincome, data = .x)),
+    model2_fit  = map(train, ~lm(bwt ~ blength + gaweeks, data = .x)),
+    model3_fit  = map(train, ~lm(bwt ~ bhead + blength + babysex + bhead * blength + bhead * babysex + blength * babysex + bhead * blength * babysex, data = as_tibble(.x)))) %>% 
+  mutate(
+    rmse_1 = map2_dbl(model1_fit, test, ~rmse(model = .x, data = .y)),
+    rmse_2 = map2_dbl(model2_fit, test, ~rmse(model = .x, data = .y)),
+    rmse_3 = map2_dbl(model3_fit, test, ~rmse(model = .x, data = .y)))
+
+# plot the prediction error distribution for each candidate model
+cv_df %>% 
+  select(starts_with("rmse")) %>% 
+  pivot_longer(
+    everything(),
+    names_to = "model", 
+    values_to = "rmse",
+    names_prefix = "rmse_") %>% 
+  mutate(model = fct_inorder(model)) %>% 
+  ggplot(aes(x = model, y = rmse)) + geom_violin()
+```
+
+According to the prediction error distribution for each of the three candidate model, we can notice that the RMSE clearly decreases in model 3, representing that the predictive accuracy increases in model 3. Among all of the 3 models, we can predict that the one using head circumference, length, sex, and all interactions between these is the most optimal.
