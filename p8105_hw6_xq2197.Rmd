@@ -8,6 +8,22 @@ library(tidyverse)
 library(modelr)
 library(mgcv)
 library(p8105.datasets)
+
+knitr::opts_chunk$set(
+  fig.width = 6,
+  fig.asp = .6,
+  out.width = "90%"
+)
+
+theme_set(theme_minimal() + theme(legend.position = "bottom"))
+
+options(
+  ggplot2.continuous.colour = "viridis",
+  ggplot2.continuous.fill = "viridis"
+)
+
+scale_colour_discrete = scale_colour_viridis_d
+scale_fill_discrete = scale_fill_viridis_d
 ```
 
 ### Problem 1
@@ -159,3 +175,96 @@ cv_df %>%
 ```
 
 According to the prediction error distribution for each of the three candidate model, we can notice that the RMSE clearly decreases in model 3, representing that the predictive accuracy increases in model 3. Among all of the 3 models, we can predict that the one using head circumference, length, sex, and all interactions between these is the most optimal.
+
+### Problem 3
+
+Read in the dataset.
+
+```{r}
+weather_df = 
+  rnoaa::meteo_pull_monitors(
+    c("USW00094728"),
+    var = c("PRCP", "TMIN", "TMAX"), 
+    date_min = "2017-01-01",
+    date_max = "2017-12-31") %>%
+  mutate(
+    name = recode(id, USW00094728 = "CentralPark_NY"),
+    tmin = tmin / 10,
+    tmax = tmax / 10) %>%
+  select(name, id, everything())
+```
+
+Generate bootstrap samples.
+
+```{r}
+bootstrap_df = 
+  weather_df %>% 
+  modelr::bootstrap(n = 5000) %>% 
+  mutate(
+    models = map(strap, ~lm(tmax ~ tmin, data = .x) ),
+    r_results = map(models, broom::glance),
+    coe_results = map(models, broom::tidy)) %>% 
+  select(-strap, -models)
+```
+
+Build the r_squared plot and CI.
+
+```{r}
+r_square =
+  bootstrap_df %>%
+  unnest(r_results) %>%
+  select(- coe_results)
+
+r_square %>%
+  ggplot(aes(x = r.squared)) + 
+  geom_density()
+
+r_square %>% 
+  summarize(
+    ci_lower = quantile(r.squared, 0.025), 
+    ci_upper = quantile(r.squared, 0.975)) %>%
+  knitr::kable(digits = 3)
+```
+
+The distribution of r-square is left-skewed, indicating that outliers may be included in the bootstrap samples. The 95% CI of r-squared is (0.894, 0.927).
+
+Build the log(beta0 * beta1) estimate plot and CI.
+
+```{r}
+log_estimate = 
+  bootstrap_df %>%
+  unnest(coe_results) %>%
+  select(- r_results)
+  
+beta_0 = 
+  log_estimate %>%
+  filter(term == "(Intercept)") %>%
+  rename(beta0 = estimate) %>%
+  select(-term, - p.value, -statistic)
+
+beta_1 = 
+  log_estimate %>%
+  filter(term == "tmin") %>%
+  rename(beta1 = estimate) %>%
+  select(-term, - p.value, -statistic)
+
+beta_df = 
+  merge(
+    beta_0,
+    beta_1,
+    by = ".id"
+  ) %>%
+  mutate(log_beta = log(beta0 * beta1))
+
+beta_df %>%
+  ggplot(aes(x = log_beta)) + 
+  geom_density()
+
+beta_df %>% 
+  summarize(
+    ci_lower = quantile(log_beta, 0.025), 
+    ci_upper = quantile(log_beta, 0.975)) %>%
+  knitr::kable(digits = 3)
+```
+
+The distribution of log(beta0 * beta1) is slightly left-skewed, indicating that outliers might be included in the bootstrap samples. The 95% CI of log(beta0 * beta1) is (1.965, 2.060).
